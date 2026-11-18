@@ -1,0 +1,106 @@
+# The AmneziaWG plugin's manifest.
+# The fields are what awg-ctl reads (crates/awg-ctl/src/config.rs); a field
+# here and not there, or there and not here, is a bug of the bundle.
+
+id = "awg"
+name = "AmneziaWG"
+version = "3.1.20261113.2-r1"   # AWG 3.1.20261113-02, our revision 1 (docs/BUILD.md)
+
+requires = [
+  "kmod-udptunnel4", "kmod-udptunnel6",
+  "kmod-crypto-lib-chacha20poly1305", "kmod-crypto-lib-curve25519",
+]
+
+[modules]
+load = ["amneziawg"]
+
+[service]
+command = "bin/awg-ctl"
+capabilities = ["CAP_NET_ADMIN"]
+settle_within = "10s"
+
+[[status]]
+key = "tunnels_up"
+label = "Tunnels up"
+type = "count"
+
+[[status]]
+key = "module_version"
+label = "Module version"
+type = "text"
+
+[tunnel]
+link_kind = "amneziawg"
+mtu = { default = 1380, min = 1280, max = 1420 }
+
+[[tunnel.status]]
+key = "public_key"
+label = "Public key"
+type = "text"
+
+[[tunnel.status]]
+key = "listen_port"
+label = "Listen port"
+type = "count"
+
+[[tunnel.status]]
+key = "last_handshake"
+label = "Last handshake"
+type = "time"
+
+[[tunnel.form]]
+title = "Interface"
+fields = ["address", "listen_port", "private_key"]
+
+[[tunnel.form]]
+title = "Peer"
+fields = ["endpoint", "peer_public_key", "preshared_key", "keepalive"]
+
+[[tunnel.form]]
+title = "Obfuscation"
+fields = ["jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4",
+          "i1", "i2", "i3", "i4", "i5", "header_protection_key"]
+folded = true
+
+[[tunnel.form]]
+title = "Padding and timers"
+fields = ["content_padding_addition", "random_trailers", "disable_cookies",
+          "rekey_after_time", "rekey_timeout", "reject_after_time",
+          "keepalive_timeout", "max_handshake_attempts"]
+folded = true
+
+[tunnel.settings]
+address         = { type = "ipv4_prefix", role = "address", required = true, label = "Address" }
+listen_port     = { type = "port", role = "listen", protocol = "udp", label = "Listen port" }
+private_key     = { type = "bytes", len = 32, secret = true, required = true, label = "Private key" }
+# host_port takes a name too; awg-ctl resolves none and refuses one at
+# the apply ("endpoint … names a host"): write an address and a port.
+endpoint        = { type = "host_port", role = "endpoint", required = true, label = "Endpoint" }
+peer_public_key = { type = "bytes", len = 32, required = true, label = "Public key" }
+preshared_key   = { type = "bytes", len = 32, secret = true, label = "Preshared key" }
+keepalive       = { type = "duration", max = "65535s", label = "Keepalive" }
+jc              = { type = "u8", label = "Jc" }
+jmin            = { type = "u16", label = "Jmin" }
+jmax            = { type = "u16", label = "Jmax" }
+s1              = { type = "u16", label = "S1" }
+s2              = { type = "u16", label = "S2" }
+s3              = { type = "u16", label = "S3" }
+s4              = { type = "u16", label = "S4" }
+h1              = { type = "range", of = "u32", label = "H1" }
+h2              = { type = "range", of = "u32", label = "H2" }
+h3              = { type = "range", of = "u32", label = "H3" }
+h4              = { type = "range", of = "u32", label = "H4" }
+i1              = { type = "template", max_len = 4096, pattern = '(<[a-z][^<>]*>)*', label = "I1" }
+i2              = { type = "template", max_len = 4096, pattern = '(<[a-z][^<>]*>)*', label = "I2" }
+i3              = { type = "template", max_len = 4096, pattern = '(<[a-z][^<>]*>)*', label = "I3" }
+i4              = { type = "template", max_len = 4096, pattern = '(<[a-z][^<>]*>)*', label = "I4" }
+i5              = { type = "template", max_len = 4096, pattern = '(<[a-z][^<>]*>)*', label = "I5" }
+header_protection_key = { type = "bytes", len = 32, secret = true, label = "Header protection key" }
+content_padding_addition = { type = "range", of = "u16", label = "Content padding addition" }
+random_trailers = { type = "bool", label = "Random trailers" }
+disable_cookies = { type = "bool", label = "Disable cookies" }
+rekey_after_time = { type = "range", of = "u16", label = "Rekey after (s)" }
+rekey_timeout   = { type = "range", of = "u16", label = "Rekey timeout (s)" }
+reject_after_time = { type = "range", of = "u16", label = "Reject after (s)" }
+keepalive_timeout = { type = "range", of = "u16", label = "Keepalive timeout (s)" }
+max_handshake_attempts = { type = "range", of = "u16", label = "Max handshake attempts" }

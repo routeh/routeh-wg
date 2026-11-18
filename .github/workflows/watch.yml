@@ -1,0 +1,85 @@
+# Every day: the targets of the latest version that the feed has no
+# bundle for on the stable OpenWrt release (a new kernel) are built and
+# published by build.yml. Every Monday (and by hand) the feed's index is signed again,
+# so that it does not expire.
+
+name: watch
+
+on:
+  schedule:
+    - cron: "17 5 * * *"   # missing bundles
+    - cron: "47 5 * * 1"   # the index signed again
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  missing:
+    if: github.event.schedule != '47 5 * * 1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: tag
+        run: |
+          tag=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if [ -n "$tag" ]; then git checkout -q "$tag"; else echo "No version tagged yet." >> "$GITHUB_STEP_SUMMARY"; fi
+      - if: steps.tag.outputs.tag != ''
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.FEED_REPOSITORY }}
+          ssh-key: ${{ secrets.FEED_DEPLOY_KEY }}
+          path: feed
+      - if: steps.tag.outputs.tag != ''
+        uses: dtolnay/rust-toolchain@stable
+      - if: steps.tag.outputs.tag != ''
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+      - if: steps.tag.outputs.tag != ''
+        name: Missing bundles
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          openwrt=$(cargo xtask targets --openwrt stable | jq -r '.[0].openwrt')
+          missing=$(cargo xtask missing --feed feed --openwrt "$openwrt")
+          if [ -z "$missing" ]; then
+            echo "The feed has $TAG for every target on OpenWrt $openwrt." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "$TAG on OpenWrt $openwrt lacks: $missing; building them." >> "$GITHUB_STEP_SUMMARY"
+          gh workflow run build.yml -R "$GITHUB_REPOSITORY" \
+            -f version="$TAG" -f openwrt="$openwrt" -f targets="$missing" -f publish=true
+
+  refresh:
+    if: github.event.schedule == '47 5 * * 1' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    environment: feed
+    concurrency:
+      group: feed
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.FEED_REPOSITORY }}
+          ssh-key: ${{ secrets.FEED_DEPLOY_KEY }}
+          path: feed
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Sign the index again
+        env:
+          FEED_SIGNING_KEY: ${{ secrets.FEED_SIGNING_KEY }}
+        run: |
+          [ -f feed/index.json ] || { echo "The feed is empty."; exit 0; }
+          umask 077
+          printf '%s\n' "$FEED_SIGNING_KEY" > "$RUNNER_TEMP/feed.key"
+          cargo xtask publish --feed feed --key "$RUNNER_TEMP/feed.key"
+          git -C feed config user.name "routeh-wg build"
+          git -C feed config user.email "routeh-wg-build@users.noreply.github.com"
+          git -C feed commit -qam "index signed again"
+          git -C feed push -q

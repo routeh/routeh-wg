@@ -1,0 +1,245 @@
+# The plugin's bundles, built, tested, signed and pushed into the feed
+# (docs/BUILD.md). Every step is a `cargo xtask` command.
+#
+#   a tag v<version>   every target of targets.toml, stable OpenWrt
+#   by hand            a version, an OpenWrt release, some targets:
+#                      a new kernel is another bundle of the same version
+#   watch.yml          the same, for a kernel the feed has no bundle for
+
+name: build
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Tag of the version (v3.1.20261113.2-r1); empty: the latest tag"
+        required: false
+      openwrt:
+        description: "OpenWrt release (25.12.6), or stable"
+        default: stable
+      targets:
+        description: "all, or targets separated by commas (mediatek/filogic,armsr/armv8)"
+        default: all
+      publish:
+        description: "Sign the bundles and push them into the feed"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ inputs.version || github.ref_name }}-${{ inputs.openwrt || 'stable' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      ref: ${{ steps.ref.outputs.ref }}
+      version: ${{ steps.plan.outputs.version }}
+      targets: ${{ steps.plan.outputs.targets }}
+      rusts: ${{ steps.plan.outputs.rusts }}
+      qemu: ${{ steps.plan.outputs.qemu }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: ref
+        name: The version to build
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = push ]; then ref=$GITHUB_REF_NAME
+          elif [ -n "$VERSION" ]; then ref=$VERSION
+          else ref=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo "$GITHUB_REF_NAME")
+          fi
+          git checkout -q "$ref"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+      - id: plan
+        name: Targets
+        env:
+          REF: ${{ steps.ref.outputs.ref }}
+          OPENWRT: ${{ inputs.openwrt || 'stable' }}
+          WHICH: ${{ inputs.targets || 'all' }}
+        run: |
+          version=$(cargo xtask version)
+          case "$REF" in
+            v*) [ "$REF" = "v$version" ] || { echo "::error::tag $REF is not v$version of plugin/manifest.toml"; exit 1; } ;;
+          esac
+          targets=$(cargo xtask targets --openwrt "$OPENWRT" --targets "$WHICH")
+          {
+            echo "version=$version"
+            echo "targets=$targets"
+            echo "rusts=$(echo "$targets" | jq -c '[.[].rust] | unique')"
+            echo "qemu=$(echo "$targets" | jq -c 'map(select(.target == "armsr/armv8")) | .[0] // null')"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### awg $version ($REF)"
+            echo "$targets" | jq -r '.[] | "- \(.target) on OpenWrt \(.openwrt): \(.arch), kernel \(.kernel)"'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  ctl:
+    needs: plan
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        rust: ${{ fromJSON(needs.plan.outputs.rusts) }}
+    name: awg-ctl ${{ matrix.rust }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+      - run: cargo xtask ctl --rust "${{ matrix.rust }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ctl-${{ matrix.rust }}
+          path: target/awg/ctl/${{ matrix.rust }}/awg-ctl
+          if-no-files-found: error
+
+  bundle:
+    needs: [plan, ctl]
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        t: ${{ fromJSON(needs.plan.outputs.targets) }}
+    name: ${{ matrix.t.target }} on ${{ matrix.t.openwrt }}
+    env:
+      SDK_DIR: ${{ github.workspace }}/../sdk
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+      - name: The SDK's host packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            build-essential file gawk gettext libncurses-dev python3-setuptools rsync unzip zstd kmod
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.SDK_DIR }}/*.tar.zst
+          key: sdk-${{ matrix.t.openwrt }}-${{ matrix.t.target }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: ctl-${{ matrix.t.rust }}
+          path: target/awg/ctl/${{ matrix.t.rust }}
+      - name: amneziawg.ko
+        run: cargo xtask kmod --openwrt "${{ matrix.t.openwrt }}" --target "${{ matrix.t.target }}" --native
+      - name: Bundle
+        run: |
+          cargo xtask bundle --openwrt "${{ matrix.t.openwrt }}" --target "${{ matrix.t.target }}"
+          cargo xtask verify "target/awg/bundles/${{ matrix.t.bundle }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ strategy.job-index }}
+          path: target/awg/bundles/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kmod-${{ strategy.job-index }}
+          path: target/awg/kmod/
+
+  qemu:
+    needs: [plan, bundle]
+    if: needs.plan.outputs.qemu != 'null'
+    runs-on: ubuntu-24.04
+    name: OpenWrt in QEMU
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends qemu-system-arm qemu-efi-aarch64
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: kmod-*
+          merge-multiple: true
+          path: target/awg/kmod
+      - uses: actions/download-artifact@v4
+        with:
+          name: ctl-aarch64-unknown-linux-musl
+          path: target/awg/ctl/aarch64-unknown-linux-musl
+      - name: The module, awg-netlink and awg-ctl on OpenWrt
+        run: cargo xtask qemu-test --openwrt "${{ fromJSON(needs.plan.outputs.qemu).openwrt }}"
+
+  publish:
+    needs: [plan, bundle, qemu]
+    # Only a version (a tag) is published; the QEMU test, when it ran, has to pass.
+    if: >-
+      always() && needs.bundle.result == 'success'
+      && (needs.qemu.result == 'success' || needs.qemu.result == 'skipped')
+      && startsWith(needs.plan.outputs.ref, 'v')
+      && (github.event_name == 'push' || inputs.publish)
+    runs-on: ubuntu-24.04
+    # The environment holds the signing key: protect it to tags, and with
+    # reviewers if a person is to approve each publication.
+    environment: feed
+    # One writer of the feed at a time.
+    concurrency:
+      group: feed
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bundle-*
+          merge-multiple: true
+          path: bundles
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.FEED_REPOSITORY }}
+          ssh-key: ${{ secrets.FEED_DEPLOY_KEY }}
+          path: feed
+      - name: Sign into the feed and push
+        env:
+          FEED_SIGNING_KEY: ${{ secrets.FEED_SIGNING_KEY }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          umask 077
+          printf '%s\n' "$FEED_SIGNING_KEY" > "$RUNNER_TEMP/feed.key"
+          git -C feed config user.name "routeh-wg build"
+          git -C feed config user.email "routeh-wg-build@users.noreply.github.com"
+          branch=$(git -C feed rev-parse --abbrev-ref HEAD)
+          # Another publication may have pushed meanwhile: start again from it.
+          for attempt in 1 2 3; do
+            git -C feed fetch -q origin "$branch"
+            git -C feed reset -q --hard "origin/$branch"
+            set -- bundles/*.tar
+            cargo xtask publish --feed feed --key "$RUNNER_TEMP/feed.key" "$@"
+            git -C feed add -A
+            git -C feed commit -q -m "awg $VERSION: $# bundle(s)"
+            if git -C feed push -q origin "HEAD:$branch"; then
+              for b in "$@"; do echo "- ${b#bundles/}"; done >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "push $attempt refused; again"
+          done
+          exit 1

@@ -1,0 +1,26 @@
+# What the plugin is built for. The OpenWrt release is chosen per build
+# (`cargo xtask build --openwrt 25.12.6`); a target's architecture comes
+# from that release's profiles.json.
+targets = [
+  "armsr/armv8",   # QEMU virt: the test target
+]
+
+# OPENWRT_ARCH -> the Rust target awg-ctl is built for.
+[rust]
+"aarch64_generic" = "aarch64-unknown-linux-musl"
+"aarch64_cortex-a53" = "aarch64-unknown-linux-musl"
+"aarch64_cortex-a72" = "aarch64-unknown-linux-musl"
+"aarch64_cortex-a76" = "aarch64-unknown-linux-musl"
+"arm_cortex-a7_neon-vfpv4" = "armv7-unknown-linux-musleabihf"
+"arm_cortex-a9_vfpv3-d16" = "armv7-unknown-linux-musleabihf"
+"arm_cortex-a15_neon-vfpv4" = "armv7-unknown-linux-musleabihf"
+"x86_64" = "x86_64-unknown-linux-musl"
+
+# The modules of OpenWrt's kmod packages the module may depend on
+# (modinfo `depends`). A bundle is refused when a dependency of the module
+# is not here, or its package is not in `requires` of plugin/manifest.toml.
+[module_packages]
+"udp_tunnel" = "kmod-udptunnel4"
+"ip6_udp_tunnel" = "kmod-udptunnel6"
+"libchacha20poly1305" = "kmod-crypto-lib-chacha20poly1305"
+"libcurve25519-generic" = "kmod-crypto-lib-curve25519"

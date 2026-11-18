@@ -46,7 +46,7 @@ pidfile="$cache/qemu.pid"
 qemu-system-aarch64 -M virt $accel -m 512 -smp 2 -bios "$efi" \
   -drive file="$img",format=raw,if=virtio,snapshot=on \
   -netdev user,id=lan,net=192.168.1.0/24,host=192.168.1.2,dns=192.168.1.3,dhcpstart=192.168.1.100,hostfwd=tcp:127.0.0.1:$port-192.168.1.1:22 \
-  -device virtio-net-pci,netdev=lan \
+  -device virtio-net-pci,netdev=lan,romfile= \
   -display none -serial file:"$cache/serial.log" -daemonize -pidfile "$pidfile"
 trap 'kill "$(cat "$pidfile")" 2>/dev/null || true' EXIT
 

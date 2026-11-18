@@ -30,6 +30,11 @@ fi
 dir="$SDK_DIR/${name%.tar.zst}"
 [ -d "$dir" ] || tar --zstd -xf "$name"
 cd "$dir"
+# A fresh SDK has no .config: without one OpenWrt knows no target, and so no
+# kernel version (include/kernel-version.mk stops).
+if [ ! -f .config ]; then
+  make defconfig > "$work/defconfig.log" 2>&1 || { tail -30 "$work/defconfig.log" >&2; exit 1; }
+fi
 
 # The module alone, against the SDK's kernel, with the SDK's toolchain and
 # the kernel make flags OpenWrt uses for its own kmods (KERNEL_MAKE of

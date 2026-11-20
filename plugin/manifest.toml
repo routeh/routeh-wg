@@ -4,7 +4,7 @@
 
 id = "awg"
 name = "AmneziaWG"
-version = "3.1.20261113.2-r1"   # AWG 3.1.20261113-02, our revision 1 (docs/BUILD.md)
+version = "3.1.20261113.2-r2"   # AWG 3.1.20261113-02, our revision 2 (docs/BUILD.md)
 api = 1
 
 requires = [

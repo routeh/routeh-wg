@@ -1,137 +1,18 @@
 //! The engine against a kernel that behaves like the module's netlink
-//! interface (`awg-netlink/docs/NETLINK.md`): errnos, defaults of a new
-//! device, peers changed in place.
+//! interface (`support/mock.rs`).
 
-use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, SystemTime};
 
-use awg_ctl::base64;
-use awg_ctl::engine::{Engine, Kernel};
-use awg_ctl::proto::{Desired, Instance, Phase};
-use awg_netlink::{Device, DeviceUpdate, Error, Key, Obfuscation, Peer, U16Range};
+use awg_ctl::engine::Engine;
+use awg_netlink::{Device, Key, U16Range};
+use routeh_plugin_sdk::protocol::base64;
+use routeh_plugin_sdk::{Desired, Instance, Phase};
 use serde_json::{json, Value};
 
-#[derive(Default)]
-struct Mock {
-    no_module: bool,
-    devices: BTreeMap<String, Device>,
-    /// Devices of another kind.
-    others: BTreeSet<String>,
-    sets: Vec<DeviceUpdate>,
-    created: Vec<String>,
-    deleted: Vec<String>,
-}
+#[path = "support/mock.rs"]
+mod mock;
+use mock::{key as k, public_of, Mock};
 
-fn kerr(errno: i32) -> Error {
-    Error::Kernel { errno, message: None }
-}
-
-fn public_of(k: &Key) -> Key {
-    let mut b = *k.as_bytes();
-    b.reverse();
-    Key::new(b)
-}
-
-impl Kernel for Mock {
-    fn ready(&mut self) -> Result<(), String> {
-        if self.no_module {
-            Err("the amneziawg module is not loaded".into())
-        } else {
-            Ok(())
-        }
-    }
-    fn links(&mut self) -> Result<Vec<String>, Error> {
-        Ok(self.devices.keys().cloned().collect())
-    }
-    fn create(&mut self, name: &str) -> Result<(), Error> {
-        if self.devices.contains_key(name) || self.others.contains(name) {
-            return Err(kerr(17));
-        }
-        self.created.push(name.into());
-        let d = Device { ifname: name.into(), obfuscation: Some(Obfuscation::default()), ..Default::default() };
-        self.devices.insert(name.into(), d);
-        Ok(())
-    }
-    fn delete(&mut self, name: &str) -> Result<(), Error> {
-        self.deleted.push(name.into());
-        self.devices.remove(name).map(|_| ()).ok_or(kerr(19))
-    }
-    fn get(&mut self, name: &str) -> Result<Device, Error> {
-        if self.others.contains(name) {
-            return Err(kerr(95));
-        }
-        self.devices.get(name).cloned().ok_or(kerr(19))
-    }
-    fn set(&mut self, u: &DeviceUpdate) -> Result<(), Error> {
-        self.sets.push(u.clone());
-        let d = self.devices.get_mut(&u.ifname).ok_or(kerr(19))?;
-        if let Some(k) = &u.private_key {
-            d.public_key = Some(public_of(k));
-            d.private_key = Some(k.clone());
-        }
-        match u.listen_port {
-            Some(0) => d.listen_port = 40000 + d.listen_port % 7 + 1,
-            Some(p) => d.listen_port = p,
-            None => {}
-        }
-        if let Some(m) = u.fwmark {
-            d.fwmark = m;
-        }
-        if let Some(o) = &u.obfuscation {
-            d.obfuscation = Some(o.clone());
-        }
-        if let Some(k) = &u.header_protection_key {
-            d.header_protection_key = Some(k.clone());
-        }
-        if u.replace_peers {
-            d.peers.clear();
-        }
-        for p in &u.peers {
-            if p.remove {
-                d.peers.retain(|x| x.public_key != p.public_key);
-                continue;
-            }
-            let pos = match d.peers.iter().position(|x| x.public_key == p.public_key) {
-                Some(i) => i,
-                None => {
-                    d.peers.push(Peer {
-                        public_key: p.public_key.clone(),
-                        preshared_key: None,
-                        endpoint: None,
-                        persistent_keepalive: U16Range::ZERO,
-                        last_handshake: None,
-                        rx_bytes: 0,
-                        tx_bytes: 0,
-                        allowed_ips: vec![],
-                    });
-                    d.peers.len() - 1
-                }
-            };
-            let x = &mut d.peers[pos];
-            if let Some(k) = &p.preshared_key {
-                x.preshared_key = (!k.is_zero()).then(|| k.clone());
-            }
-            if let Some(e) = p.endpoint {
-                x.endpoint = Some(e);
-            }
-            if let Some(k) = p.persistent_keepalive {
-                x.persistent_keepalive = k;
-            }
-            if p.replace_allowed_ips {
-                x.allowed_ips.clear();
-            }
-            x.allowed_ips.extend(p.allowed_ips.iter().copied());
-        }
-        Ok(())
-    }
-    fn module_version(&mut self) -> Option<String> {
-        Some("3.1.20261113-02".into())
-    }
-}
-
-fn k(b: u8) -> String {
-    base64::encode(&[b; 32])
-}
 
 fn settings() -> Value {
     json!({
@@ -194,12 +75,11 @@ fn a_new_tunnel_is_made_and_configured_once() {
     assert_eq!(ips, ["0.0.0.0/0", "::/0"]);
 
     let s = e.state(now());
-    assert_eq!(s.digest.as_deref(), Some("sha256:a"));
     assert!(s.settled);
     let t = &s.instances["vpn"];
     assert_eq!(t.phase, Phase::Connecting);
     assert_eq!(t.peer.as_deref(), Some("203.0.113.7:51820"));
-    assert_eq!(t.values["public_key"], json!(base64::encode(public_of(&Key::new([1; 32])).as_bytes())));
+    assert_eq!(t.values["public_key"], json!(base64::encode(public_of(&Key::new([1; 32])).as_bytes(), true)));
     assert!(t.values.contains_key("listen_port"));
     assert!(!t.values.contains_key("last_handshake"));
     assert_eq!(s.values["tunnels_up"], json!(0));
@@ -231,7 +111,7 @@ fn phases_follow_the_handshake() {
     e.converge();
     let hs = |e: &mut Engine<Mock>, ago: u64| {
         e.kernel().devices.get_mut("tn_vpn").unwrap().peers[0].last_handshake = Some(Duration::from_secs(NOW - ago));
-        e.refresh();
+        e.converge();
     };
     hs(&mut e, 10);
     let s = e.state(now());
@@ -257,7 +137,7 @@ fn the_state_does_not_change_by_itself_every_second() {
     e.set_desired(desired("a", &[("vpn", settings())]));
     e.converge();
     e.kernel().devices.get_mut("tn_vpn").unwrap().peers[0].last_handshake = Some(Duration::from_secs(NOW - 10));
-    e.refresh();
+    e.converge();
     let a = e.state(now());
     let b = e.state(now() + Duration::from_secs(30));
     assert_eq!(a, b);
@@ -317,7 +197,6 @@ fn a_refused_configuration_leaves_the_device_alone() {
     assert_eq!(e.kernel().sets.len(), 1);
     let s = e.state(now());
     assert!(s.settled);
-    assert_eq!(s.digest.as_deref(), Some("b"));
     assert_eq!(s.instances["vpn"].phase, Phase::Error);
     assert_eq!(s.instances["vpn"].message, "Jmin (80) is above Jmax (70)");
     assert!(e.log.iter().any(|(k, t)| k.as_deref() == Some("vpn") && t.contains("Jmin")));
@@ -439,16 +318,15 @@ fn shutdown_removes_every_device() {
 }
 
 #[test]
-fn the_state_line_has_the_channel_s_shape() {
+fn a_quiet_tick_reads_each_tunnel_once_and_writes_nothing() {
     let mut e = engine();
-    e.set_desired(desired("sha256:a", &[("vpn", settings())]));
+    e.set_desired(desired("a", &[("vpn", settings()), ("b", settings())]));
     e.converge();
-    let line = awg_ctl::proto::line("state", &e.state(now()));
-    let v: Value = serde_json::from_str(&line).unwrap();
-    let s = &v["state"];
-    assert_eq!(s["digest"], "sha256:a");
-    assert_eq!(s["settled"], true);
-    assert_eq!(s["instances"]["vpn"]["phase"], "connecting");
-    assert!(s["instances"]["vpn"]["values"]["public_key"].is_string());
-    assert!(line.ends_with('\n') && !line[..line.len() - 1].contains('\n'));
+    let sets = e.kernel().sets.len();
+    e.kernel().gets = 0;
+    e.converge();
+    assert_eq!(e.kernel().gets, 2, "one read a tunnel");
+    assert_eq!(e.kernel().sets.len(), sets, "nothing sent");
+    // What was read is what the state says.
+    assert_eq!(e.state(now()).instances["vpn"].phase, Phase::Connecting);
 }

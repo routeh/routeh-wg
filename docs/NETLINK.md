@@ -139,7 +139,7 @@ everything is `to_ne_bytes`, except the port and flow label of a
   the runner's; it passed on Linux 7.0.12): create, set, a dump of 3000
   allowed IPs over several messages, `EEXIST`, `ENODEV`.
 - AmneziaWG: `cargo xtask qemu-test` boots OpenWrt 25.12.6 armsr/armv8 in
-  QEMU and loads the module built by `cargo xtask kmod`. The AmneziaWG
+  QEMU and loads the module built by `cargo xtask build`. The AmneziaWG
   round trip passes (header protection, H swapped in one message, back to
   the defaults, the module's own `EINVAL`), and awg-ctl's engine reaches
   `up` through a real handshake with every obfuscation on.

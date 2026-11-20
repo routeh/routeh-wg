@@ -62,6 +62,6 @@ impl Kernel for Netlink {
         let exe = std::env::current_exe().ok()?;
         let build = exe.parent()?.parent()?.join("build.json");
         let v: serde_json::Value = serde_json::from_slice(&std::fs::read(build).ok()?).ok()?;
-        v.get("module_version")?.as_str().map(str::to_owned)
+        v["modules"]["amneziawg"]["version"].as_str().map(str::to_owned)
     }
 }

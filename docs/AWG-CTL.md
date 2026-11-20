@@ -6,19 +6,19 @@ No pages, no DNS, no server side.
 
 ## Its life
 
-- `awg-ctl <socket>`: binds `<socket>.new` (mode 0600) and renames it to
-  `<socket>` once it listens, so the name answers from the moment it
-  appears; takes several connections. On each: `hello {protocol: 1, plugin: "awg",
-  version}`, then the current `state`.
-- Each `desired` is converged before the next line is read, then `state`
-  is sent to every connection if it differs from the last sent.
-- Every 5 s it converges again: what is right costs a dump, what was
-  changed or removed behind its back is put back.
-- SIGTERM (the plugin is off, or replaced): it removes its devices and its
-  socket, and exits. A crash removes nothing: procd starts it again, it is
-  told the applied `desired`, and finds its devices as they are.
-- Logs go to `/dev/log` as `awg` and `awg/<key>`, only when something
-  changes (a tunnel configured, an error appearing or going).
+The channel is routeh-plugin-sdk's (`Awg` is its `Plugin`): the socket,
+`hello`, `desired` in, `state` out when it changed, SIGTERM, the system
+log. What is the plugin's:
+
+- Each `desired` is converged by the engine (`engine.rs`) over the
+  module's netlink (`kernel.rs`).
+- Every 5 s it converges again (`tick`): what is right costs a dump, what
+  was changed or removed behind its back is put back.
+- When stopped it removes its devices. A crash removes nothing: procd
+  starts it again, it is told the applied `desired`, and finds its devices
+  as they are.
+- Logs go to the system log as `awg` and `awg/<key>`, only when something
+  changes (an error appearing or going, a device removed).
 
 ## What it reads
 
@@ -26,9 +26,9 @@ No pages, no DNS, no server side.
 it, each value as the router writes it into `desired` (as its configuration
 writes it): keys in base64 of 32 bytes, ranges `"lo-hi"` (also
 `{"lo", "hi"}` or one number), durations `"25s"`, `"1m"`, `"2h"` (or
-seconds). A key it does not know is an error. A `desired` line is read
-whole, however long; what it sends is at most 64 KiB a line, and a longer
-`state` is not sent but logged.
+seconds). A key it does not know is an error. `tests/plugin.rs` checks
+the manifest is one the router installs, and that every value awg-ctl
+reports is one the manifest declares, of its type.
 
 The endpoint is the router's `host_port`, which takes a name; there is no
 DNS in the plugin, so a name is refused at the apply (`endpoint
@@ -71,7 +71,7 @@ key replaces the peer.
 ## What it reports
 
 Plugin: `tunnels_up` (count), `module_version` (from
-`/sys/module/amneziawg/version`).
+`/sys/module/amneziawg/version`, or the bundle's `build.json` on OpenWrt).
 
 Each tunnel:
 

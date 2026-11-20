@@ -7,9 +7,4 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-toml = "0.8"
-tar = "0.4"
-# ed25519 and SHA-256: the arithmetic the router uses to check bundles.
-ring = "=0.17.14"
+routeh-plugin-build.workspace = true

@@ -1,7 +1,7 @@
 # The AmneziaWG kernel module as an OpenWrt package, built with the SDK of
 # the exact release and target it is for. `cargo xtask kmod` builds the
-# module alone with the SDK (kmod/build.sh); this package is
-# where the source is pinned, and stays buildable as a package.
+# module alone with the SDK (build.toml); this package is where the source
+# is pinned, and stays buildable as a package.
 #
 # The source is amneziawg-linux-kernel-module at a fixed commit, built out
 # of tree against the SDK's kernel: the module of AWG 3.1, not the kernel's

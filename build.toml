@@ -1,0 +1,16 @@
+# What `cargo xtask build` builds (routeh-plugin's docs/BUILD.md).
+targets = ["armsr/armv8"]   # QEMU virt: the test target
+
+[service]
+package = "awg-ctl"
+
+[[module]]
+name = "amneziawg"
+dir = "kmod/amneziawg"
+version_file = "src/version.h"
+version_define = "WIREGUARD_VERSION"
+pins_version = true          # the plugin's version is AWG's, -r<n>
+
+[qemu]
+tests = ["live", "e2e"]
+env = { AWG_LIVE = "1", AWG_REQUIRE = "amneziawg" }

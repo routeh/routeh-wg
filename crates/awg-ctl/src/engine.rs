@@ -1,15 +1,17 @@
 //! Converging the module's devices to `desired`, and the `state` of them.
 //!
 //! Pure over the `Kernel` trait, so it is tested with a mock on any system.
+//! `desired` and `state` are the SDK's (`routeh-plugin-sdk`).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, SystemTime};
 
 use awg_netlink::{Device, DeviceUpdate, Error, Key, PeerUpdate};
-use serde_json::{json, Value};
+use routeh_plugin_sdk::protocol::base64;
+use routeh_plugin_sdk::{Desired, InstanceState, Phase, State};
+use serde_json::json;
 
 use crate::config::TunnelConfig;
-use crate::proto::{Desired, InstanceState, Phase, State};
 
 /// Every device the router names for a tunnel starts so.
 /// A device of the module's kind with this prefix that `desired` does not
@@ -110,21 +112,25 @@ impl<K: Kernel> Engine<K> {
                 *t = Tunnel { device: inst.device.clone(), ..Default::default() };
             }
             let result = parsed.and_then(|cfg| {
-                let recreated = apply(&mut self.kernel, &inst.device, inst.mark, &cfg, t.applied.as_ref())?;
-                Ok((cfg, recreated))
+                let done = apply(&mut self.kernel, &inst.device, inst.mark, &cfg, t.applied.as_ref())?;
+                Ok((cfg, done))
             });
             let before = t.error.clone();
+            // Nothing sent: the device read to plan is the device. Else (an
+            // update, a new device, an error) it is read as it is now.
+            let mut unchanged = None;
             match result {
-                Ok((cfg, recreated)) => {
-                    if recreated {
+                Ok((cfg, done)) => {
+                    if done.made {
                         t.ever_up = false;
                     }
                     t.applied = Some(cfg);
                     t.error = None;
+                    unchanged = done.unchanged;
                 }
                 Err(e) => t.error = Some(e),
             }
-            t.dump = self.kernel.get(&inst.device).ok();
+            t.dump = unchanged.or_else(|| self.kernel.get(&inst.device).ok());
             let after = t.error.clone();
             if after != before {
                 let text = after.unwrap_or_else(|| "configured".into());
@@ -147,15 +153,6 @@ impl<K: Kernel> Engine<K> {
         self.tunnels.retain(|k, _| desired.instances.contains_key(k));
     }
 
-    /// Reads every device again without changing anything.
-    pub fn refresh(&mut self) {
-        for t in self.tunnels.values_mut() {
-            if t.applied.is_some() {
-                t.dump = self.kernel.get(&t.device).ok();
-            }
-        }
-    }
-
     pub fn state(&mut self, now: SystemTime) -> State {
         let mut instances = BTreeMap::new();
         let mut up = 0u64;
@@ -169,18 +166,17 @@ impl<K: Kernel> Engine<K> {
                 instances.insert(key.clone(), s);
             }
         }
-        let mut values = BTreeMap::new();
-        values.insert("tunnels_up", json!(up));
-        if let Some(v) = self.kernel.module_version() {
-            values.insert("module_version", json!(v));
-        }
-        State {
-            digest: self.desired.as_ref().map(|d| d.digest.clone()),
+        let mut state = State {
             // Each desired is converged before the next line is read.
             settled: self.desired.is_some(),
-            values,
             instances,
+            ..State::default()
+        };
+        state = state.value("tunnels_up", up);
+        if let Some(v) = self.kernel.module_version() {
+            state = state.value("module_version", v);
         }
+        state
     }
 
     /// Removes every device of every tunnel: the plugin is being stopped.
@@ -197,20 +193,20 @@ impl<K: Kernel> Engine<K> {
 }
 
 fn instance_state(t: &mut Tunnel, now: SystemTime) -> InstanceState {
-    let mut values = BTreeMap::<&'static str, Value>::new();
+    let mut values = BTreeMap::new();
     let mut peer_addr = None;
     let mut handshake = None;
     if let Some(d) = &t.dump {
         if let Some(k) = &d.public_key {
-            values.insert("public_key", json!(crate::base64::encode(k.as_bytes())));
+            values.insert("public_key".into(), json!(base64::encode(k.as_bytes(), true)));
         }
-        values.insert("listen_port", json!(d.listen_port));
+        values.insert("listen_port".into(), json!(d.listen_port));
         let want = t.applied.as_ref().map(|c| &c.peer_public_key);
         if let Some(p) = d.peers.iter().find(|p| Some(&p.public_key) == want) {
             peer_addr = p.endpoint.map(|e| e.to_string());
             handshake = p.last_handshake;
             if let Some(h) = p.last_handshake {
-                values.insert("last_handshake", json!(h.as_secs()));
+                values.insert("last_handshake".into(), json!(h.as_secs()));
             }
         }
     }
@@ -239,14 +235,23 @@ fn instance_state(t: &mut Tunnel, now: SystemTime) -> InstanceState {
     InstanceState { phase, message, peer: peer_addr, values }
 }
 
-/// Makes `name` what `cfg` says. True when the device was made (again).
+/// What `apply` did.
+struct Applied {
+    /// The device was made (again).
+    made: bool,
+    /// The device as it is now, when nothing was sent to it: what was read
+    /// to plan the update is still true, and is not read again.
+    unchanged: Option<Device>,
+}
+
+/// Makes `name` what `cfg` says.
 fn apply<K: Kernel>(
     k: &mut K,
     name: &str,
     mark: u32,
     cfg: &TunnelConfig,
     applied: Option<&TunnelConfig>,
-) -> Result<bool, String> {
+) -> Result<Applied, String> {
     let found = match k.get(name) {
         Ok(d) => Some(d),
         Err(e) if e.errno() == Some(ENODEV) => None,
@@ -275,10 +280,11 @@ fn apply<K: Kernel>(
         found.unwrap()
     };
     let u = plan(&dev, name, mark, cfg, if made { None } else { applied });
-    if !is_empty(&u) {
-        k.set(&u).map_err(|e| format!("configuring {name}: {e}"))?;
+    if is_empty(&u) {
+        return Ok(Applied { made, unchanged: Some(dev) });
     }
-    Ok(made)
+    k.set(&u).map_err(|e| format!("configuring {name}: {e}"))?;
+    Ok(Applied { made, unchanged: None })
 }
 
 /// Only what differs, so a session is not broken by an update that changes

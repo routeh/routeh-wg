@@ -12,10 +12,10 @@
 use std::process::Command;
 use std::time::{Duration, Instant, SystemTime};
 
-use awg_ctl::base64;
 use awg_ctl::engine::Engine;
 use awg_ctl::kernel::Netlink;
-use awg_ctl::proto::{Desired, Instance, Phase};
+use routeh_plugin_sdk::protocol::base64;
+use routeh_plugin_sdk::{Desired, Instance, Phase};
 use awg_netlink::{Client, DeviceUpdate, Flavor, Key, Obfuscation, PeerUpdate, U32Range};
 use serde_json::json;
 
@@ -83,16 +83,16 @@ fn a_handshake_with_full_obfuscation() {
     // The client, through the engine, as the router would ask for it.
     let range = |r: U32Range| json!({"lo": r.lo(), "hi": r.hi()});
     let settings = json!({
-        "private_key": base64::encode(client_priv.as_bytes()),
+        "private_key": base64::encode(client_priv.as_bytes(), true),
         "endpoint": "127.0.0.1:51990",
-        "peer_public_key": base64::encode(server_pub.as_bytes()),
-        "preshared_key": base64::encode(psk.as_bytes()),
+        "peer_public_key": base64::encode(server_pub.as_bytes(), true),
+        "preshared_key": base64::encode(psk.as_bytes(), true),
         "keepalive": 5,
         "jc": obf.jc, "jmin": obf.jmin, "jmax": obf.jmax,
         "s1": obf.s[0], "s2": obf.s[1], "s3": obf.s[2], "s4": obf.s[3],
         "h1": range(obf.h[0]), "h2": range(obf.h[1]), "h3": range(obf.h[2]), "h4": range(obf.h[3]),
         "i1": obf.i[0], "i2": obf.i[1],
-        "header_protection_key": base64::encode(hp.as_bytes()),
+        "header_protection_key": base64::encode(hp.as_bytes(), true),
     });
     let mut e = Engine::new(Netlink::default());
     e.set_desired(Desired {
@@ -120,7 +120,7 @@ fn a_handshake_with_full_obfuscation() {
 
     let deadline = Instant::now() + Duration::from_secs(20);
     let phase = loop {
-        e.refresh();
+        e.converge();
         let s = e.state(SystemTime::now());
         let t = &s.instances["e2e"];
         if t.phase == Phase::Up || Instant::now() > deadline {

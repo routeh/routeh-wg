@@ -53,6 +53,16 @@ fn the_manifest_is_one_the_router_installs() {
 }
 
 #[test]
+fn it_says_it_answers_pings_and_answers_them() {
+    let manifest = manifest();
+    let harness = Harness::start(Awg::new(Mock::default())).unwrap();
+    let mut router = harness.connect(&manifest).unwrap();
+    assert!(router.hello().unwrap().pings);
+    router.ping().unwrap();
+    harness.stop().unwrap();
+}
+
+#[test]
 fn a_tunnel_is_made_and_reported_as_the_manifest_declares() {
     let manifest = manifest();
     let harness = Harness::start(Awg::new(Mock::default())).unwrap();

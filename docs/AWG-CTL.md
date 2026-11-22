@@ -7,8 +7,8 @@ No pages, no DNS, no server side.
 ## Its life
 
 The channel is routeh-plugin-sdk's (`Awg` is its `Plugin`): the socket,
-`hello`, `desired` in, `state` out when it changed, SIGTERM, the system
-log. What is the plugin's:
+`hello`, `desired` in, `state` out when it changed, `ping`, SIGTERM, the
+system log. What is the plugin's:
 
 - Each `desired` is converged by the engine (`engine.rs`) over the
   module's netlink (`kernel.rs`).

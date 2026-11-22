@@ -16,6 +16,12 @@ use routeh_plugin_sdk::protocol::base64;
 use serde::Deserialize;
 use serde_json::Value;
 
+/// The keepalive of a tunnel that does not say one, in seconds. WireGuard
+/// makes a handshake only when it has something to send, and the router
+/// sends a tunnel traffic only once a handshake says it is up, so a tunnel
+/// with no keepalive would never come up. `0` written turns it off.
+const DEFAULT_KEEPALIVE: u16 = 25;
+
 /// What one tunnel is to be, checked against everything the module would
 /// refuse or misuse.
 #[derive(Debug, Clone, PartialEq)]
@@ -26,7 +32,7 @@ pub struct TunnelConfig {
     pub endpoint: SocketAddr,
     pub peer_public_key: Key,
     pub preshared_key: Option<Key>,
-    /// `ZERO`: off.
+    /// `ZERO`: off, only when written as zero.
     pub keepalive: U16Range,
     pub obfuscation: Obfuscation,
     pub header_protection_key: Option<Key>,
@@ -144,7 +150,7 @@ impl TunnelConfig {
         obfuscation.validate(header_protection_key.is_some()).map_err(|e| e.to_string())?;
 
         let keepalive = match &r.keepalive {
-            None => U16Range::ZERO,
+            None => U16Range::fixed(DEFAULT_KEEPALIVE),
             Some(v) => U16Range::fixed(seconds(v).map_err(|e| format!("keepalive: {e}"))?),
         };
         Ok(Self {

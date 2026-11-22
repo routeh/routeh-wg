@@ -22,7 +22,9 @@ fn base() -> Value {
 fn minimal_is_plain_wireguard() {
     let c = TunnelConfig::from_settings(&base()).unwrap();
     assert_eq!(c.obfuscation, Obfuscation::default());
-    assert_eq!(c.keepalive, U16Range::ZERO);
+    // Not written: 25 s. Without traffic WireGuard makes no handshake, and
+    // a router sends a tunnel no traffic until a handshake says it is up.
+    assert_eq!(c.keepalive, U16Range::fixed(25));
     assert_eq!(c.listen_port, None);
     assert_eq!(c.endpoint.to_string(), "203.0.113.7:51820");
 
@@ -82,4 +84,11 @@ fn refusals_name_the_field() {
     // S below 12 with a header protection key
     let e = with("header_protection_key", json!(k(9)));
     assert!(e.contains("S1 (0) must be at least 12"), "{e}");
+}
+
+#[test]
+fn a_keepalive_of_zero_is_off() {
+    let mut v = base();
+    v["keepalive"] = json!("0s");
+    assert_eq!(TunnelConfig::from_settings(&v).unwrap().keepalive, U16Range::ZERO);
 }
